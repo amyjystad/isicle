@@ -136,7 +136,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         self.geom.path = geomfile
 
     def _configure_xtb(
-        self, forcefield="gfn2", optlevel="normal", charge=None, solvation=None, parameter_file=None
+        self, forcefield="gfn 2", optlevel="normal", charge=None, solvation=None, parameter_file=None, gradient=False, processes=1,
     ):
         """
         Set command line for xtb simulations.
@@ -163,6 +163,9 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         # Add geometry
         s += "{}.{}".format(self.basename, self.fmt.lower())
 
+        if gradient is True:
+            s += " --grad "
+
         # Add optimize tag
         s += " --opt " + optlevel + " "
 
@@ -179,18 +182,21 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
 
         if parameter_file is not None:
             s += "--vparam "+ parameter_file + " "
+        
+        s += "--P {} ".format(processes)
 
         # Add output
         s += "&>" + " "
 
         s += "{}.{}".format(self.basename, "out")
+        print(s)
         return s
 
     def _configure_crest(
         self,
         ewin=6,
         optlevel="Normal",
-        forcefield="gfn2",
+        forcefield="gfn 2",
         protonate=False,
         deprotonate=False,
         tautomerize=False,
@@ -216,7 +222,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         forcefield : str
             GFN forcefield for the optimization
             Default: gff
-            Supported forcefields: gfn2, gfn1, gff
+            Supported forcefields: gfn 2, gfn 1, gff
         protonate : bool
             Signal to initiate protomer search. Suggested ewin = 30.
             Default : False
@@ -300,6 +306,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         solvation=None,
         ignore_topology=False,
         parameter_file=None,
+        gradient=False,
     ):
         """
         Generate command line
@@ -336,7 +343,15 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
             raise TypeError("Initiate one opt level at a time.")
 
         if task == "optimize":
-            config = self._configure_xtb(optlevel=optlevel, forcefield=forcefield)
+            config = self._configure_xtb(
+                            optlevel=optlevel,
+                            forcefield=forcefield, 
+                            gradient=gradient,
+                            parameter_file=parameter_file, 
+                            charge=charge, 
+                            processes=processes,
+                            solvation=solvation,
+                        )
 
         else:
             if task == "conformer":
@@ -366,6 +381,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
                     solvation=solvation,
                     ignore_topology=ignore_topology,
                     parameter_file=parameter_file,
+                    gradient=gradient,
                 )
             else:
                 raise Error(
