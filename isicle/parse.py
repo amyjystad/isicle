@@ -326,6 +326,7 @@ class ORCAParser(FileParserInterface):
     def save(self, path):
         isicle.io.save_pickle(path, self.result)
 
+
 class GaussianParser(FileParserInterface):
     '''Extract text from a Gaussian simulation output file.'''
 
@@ -339,19 +340,36 @@ class GaussianParser(FileParserInterface):
         with open(path, 'r') as f:
             self.contents = f.readlines()
         self.path = path
-        return self.contents
     
     def _parse_protocol(self):
-        protocol = []
+        protocol = {}
+        solvent = None
+        charge = None
+        multiplicity = None
+
+        input_line = []
         for idx, line in enumerate(self.contents):
             if line.startswith(' # '):
                 for idx2, line2 in enumerate(self.contents[idx:]):
                     if line2.startswith(' ---'):
                         break
                     else:
-                        protocol.append(line2)
+                        input_line.append(line2)
+            if "Charge =" in line:
+                split_line = line.split()
+                protocol['charge'] = int(split_line[2])
+                protocol['multiplicity'] = int(split_line[5])
                 break
-        protocol = ''.join([x.strip() for x in protocol])
+
+
+        protocol['input line'] = ''.join([x.strip() for x in input_line])
+        if 'SCRF' in protocol['input line']:
+            split = protocol['input line'].split()
+            scrf = [x for x in split if 'SCRF' in split][0].lower()
+            solvent = [x for x in scrf.split(',') if 'solvent=' in x][0]
+            solvent = solvent.split('=')[-1]
+
+        protocol['solvation'] = solvent
         
         return protocol
 
@@ -620,6 +638,7 @@ class GaussianParser(FileParserInterface):
     def save(self):
         pass
 
+
 class NWChemParser(FileParserInterface):
     """
     Extract text from an NWChem simulation output file.
@@ -637,7 +656,6 @@ class NWChemParser(FileParserInterface):
         with open(path, "r") as f:
             self.contents = f.readlines()
         self.path = path
-        return self.contents
 
     def _parse_geometry(self):
         """
@@ -697,6 +715,8 @@ class NWChemParser(FileParserInterface):
 
             geom = isicle.load(xyz_path)
             os.remove(xyz_path)
+            
+            return geom
 
     def _parse_rms(self):
         xyz1 = [x[1:] for x in self.first]
@@ -721,7 +741,6 @@ class NWChemParser(FileParserInterface):
                 energy.append(float(line.split()[-1]))
 
         return energy
-
 
     def _parse_forces(self):
         line_list = [idx for idx, line in enumerate(self.contents) if 'GRADIENTS' in line]
@@ -748,7 +767,6 @@ class NWChemParser(FileParserInterface):
             forces.append(get_forces(idx))
 
         return forces
-
 
     def _parse_shielding(self):
         """
@@ -1024,10 +1042,27 @@ class NWChemParser(FileParserInterface):
         basis = None
         func = None
         solvent = None
+        charge = None
+        multiplicity = None
+        ecp = None
 
-        for line in self.contents:
-            if "* library" in line:
-                basis = line.split()[-1]
+        first = True
+        for idx, line in enumerate(self.contents):
+            if "basis" in line:
+                basis = []
+                for lines in self.contents[idx+1:]:
+                    if lines.startswith('end'):
+                        break
+                    else:
+                        basis.append(lines)
+            if "ecp" in line and first is True:
+                ecp = []
+                for lines in self.contents[idx+1:]:
+                    if lines.startswith('end'):
+                        break
+                    else:
+                        ecp.append(lines)
+                first = False
             if " xc " in line:
                 func = line.split(" xc ")[-1].strip()
             if "solvent " in line:
@@ -1053,11 +1088,23 @@ class NWChemParser(FileParserInterface):
                 functional.append(func)
                 solvation.append(solvent)
 
+        for line in self.contents:
+            if "charge" in line:
+                charge = int(line.split()[-1])
+                break
+
+        for line in self.contents:
+            if "Spin multiplicity" in line:
+                multiplicity = int(line.split()[-1])
+                break
         return {
             "functional": functional,
             "basis set": basis_set,
             "solvation": solvation,
             "tasks": tasks,
+            "charge": charge,
+            "multiplicity": multiplicity,
+            "ecp": ecp
         }
 
     def _parse_connectivity(self):
@@ -1333,7 +1380,6 @@ class XTBParser(FileParserInterface):
         with open(path, "r") as f:
             self.contents = f.readlines()
         self.path = path
-        # return self.contents
 
     def _crest_energy(self):
         """
@@ -1530,13 +1576,27 @@ class XTBParser(FileParserInterface):
         """
         Add docstring
         """
-        protocol = None
+        protocol = {}
+
+        solvent = None
+        charge = 0
 
         for line in self.contents:
             if " > " in line:
-                protocol = line.strip("\n")
+                input_line = line.strip("\n")
             if "program call" in line:
-                protocol = (line.split(":")[1]).strip("\n")
+                input_line = (line.split(":")[1]).strip("\n")
+            if "total charge" in line:
+                protocol['charge'] = int(float(line.split()[3]))
+
+        if 'alpb' in input_line:
+            solvent = input_line.split('alpb ')[-1].split()[0]
+
+        protocol = {
+            'input line': input_line,
+            'charge': charge,
+            'solvation': solvent,
+        }
         return protocol
 
     def _parse_geometry(self):
@@ -1630,7 +1690,6 @@ class XTBParser(FileParserInterface):
                 try:
                     self.xyz_path = self.path
                     result["geom"] = self._parse_geometry()
-
                 except:
                     pass
 
@@ -1638,17 +1697,18 @@ class XTBParser(FileParserInterface):
                 # try geometry parsing
                 try:
                     XYZ = None
-                    if result["protocol"].split()[0] == "xtb":
+                    if result["protocol"]['input line'].split()[0] == "xtb":
                         self.parse_opt = True
                         XYZ = "xtbopt.log"
-                    if result["protocol"].split()[1] == "crest":
-                        if "-deprotonate" in result["protocol"]:
+
+                    if result["protocol"]['input line'].split()[1] == "crest":
+                        if "-deprotonate" in result["protocol"]['input line']:
                             self.parse_isomer = True
                             XYZ = "deprotonated.xyz"
-                        elif "-protonate" in result["protocol"]:
+                        elif "-protonate" in result["protocol"]['input line']:
                             self.parse_isomer = True
                             XYZ = "protonated.xyz"
-                        elif "-tautomer" in result["protocol"]:
+                        elif "-tautomer" in result["protocol"]['input line']:
                             self.parse_isomer = True
                             XYZ = "tautomers.xyz"
                         else:
