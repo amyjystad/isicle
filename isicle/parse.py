@@ -1583,19 +1583,19 @@ class XTBParser(FileParserInterface):
 
     def _parse_forces(self):
 
-        with open('gradients', 'r') as f:
+        with open('gradient', 'r') as f:
             contents = f.readlines()
 
         atoms = []
         forces = []
         for line in contents:
-            if line.split() == 4:
+            if len(line.split()) == 4:
                 atoms.append(line.split()[-1])
-            if line.split() == 3:
+            if len(line.split()) == 3:
                 f = line.split()
                 forces.append([float(x) for x in f])
 
-        forces = [[atoms[idx], forces[idx][:]] for idx, line in enumerate(forces)]
+        forces = [[atoms[idx], forces[idx][0], forces[idx][1], forces[idx][2]] for idx, line in enumerate(forces)]
 
         return forces
 
