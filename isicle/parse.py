@@ -326,6 +326,299 @@ class ORCAParser(FileParserInterface):
     def save(self, path):
         isicle.io.save_pickle(path, self.result)
 
+class GaussianParser(FileParserInterface):
+    '''Extract text from a Gaussian simulation output file.'''
+
+    def __init__(self):
+        self.contents = None
+        self.result = None
+        self.path = None
+
+    def load(self, path: str):
+        '''Load in the data file'''
+        with open(path, 'r') as f:
+            self.contents = f.readlines()
+        self.path = path
+        return self.contents
+    
+    def _parse_protocol(self):
+        protocol = []
+        for idx, line in enumerate(self.contents):
+            if line.startswith(' # '):
+                for idx2, line2 in enumerate(self.contents[idx:]):
+                    if line2.startswith(' ---'):
+                        break
+                    else:
+                        protocol.append(line2)
+                break
+        protocol = ''.join([x.strip() for x in protocol])
+        
+        return protocol
+
+    def _parse_geometry(self):
+        #Compile list of indices associated with empty lines in the file
+        #Will help grab block of text at end of file.
+        line_list = [idx for idx, line in enumerate(self.contents) if 'Input orientation' in line]
+        first_geom = line_list[0] + 5
+        last_geom = line_list[-1] + 5
+   
+        atomic_masses = isicle.utils.atomic_masses()
+
+        def get_geom(idx):
+            geom = []
+            for line in self.contents[idx:]:
+                if line.startswith(' -----'):
+                    break
+                else:
+                    geom.append(line)
+
+            #text editing to make readable
+            for idx, line in enumerate(geom):
+                split_line = line.split()
+                geom[idx]=[atomic_masses.Symbol[int(split_line[1])-1], float(split_line[3]), float(split_line[4]), float(split_line[5])]
+
+            return geom
+
+        self.first = get_geom(first_geom)
+        self.last = get_geom(last_geom)
+
+        xyz = [[x[0],str(x[1]), str(x[2]), str(x[3])] for x in self.last]
+        xyz = ['\t'.join(x) for x in xyz]
+
+        xyz_block = str(len(xyz))+'\n\n'
+        xyz = '\n'.join(xyz)
+        xyz_block = xyz_block + xyz
+
+        xyz_path = self.path.split('.')[0] + '.xyz'
+        with open(xyz_path, 'w+') as f:
+            f.write(xyz_block)
+        f.close()
+
+        geom = isicle.load(xyz_path)
+        os.remove(xyz_path)
+
+        return geom
+
+    def _parse_rms(self):
+        xyz1 = [x[1:] for x in self.first]
+        xyz2 = [y[1:] for y in self.last]
+
+        rms = np.sqrt(np.mean((np.array(xyz1) - np.array(xyz2)) ** 2))
+
+        return rms
+
+    def _parse_forces(self):
+        line_list = [idx for idx, line in enumerate(self.contents) if 'Forces (Hartrees/Bohr)' in line]
+        line_list = [idx+3 for idx in line_list]
+        atomic_masses = isicle.utils.atomic_masses()
+   
+        def get_forces(idx):
+            forces = []
+            for line in self.contents[idx:]:
+                if line.startswith(' -----'):
+                    break
+                else:
+                    forces.append(line)
+
+            #text editing to make readable
+            for idx, line in enumerate(forces):
+                split_line = line.split()
+                forces[idx]=[atomic_masses.Symbol[int(split_line[1])-1], float(split_line[2]), float(split_line[3]), float(split_line[4])]
+
+            return forces
+
+        forces = []
+        for idx in line_list:
+            forces.append(get_forces(idx))
+
+        return forces
+
+    def _parse_frequency(self):
+        
+        frequency_list = []
+
+        for line in self.contents:
+            if 'Frequencies' in line:
+                freq = line.split()[2:]
+                for i in freq:
+                    frequency_list.append(i)        
+
+        return frequency_list
+
+    def _parse_energy(self):
+
+        scf = None
+        zpe = None
+        internal = None
+        enthalpy = None
+        gibbs_free = None
+
+        for line in self.contents:
+
+            if ' SCF Done: ' in line:
+                scf = float(line.split()[4])
+
+            if 'Sum of electronic and zero-point' in line:
+                zpe = float(line.split()[6])
+
+            if "Sum of electronic and thermal Energies" in line:
+                internal = float(line.split()[6])
+
+            if "Sum of electronic and thermal Enthalpies" in line:
+                enthalpy = float(line.split()[6])
+
+            if "Sum of electronic and thermal Free Energies" in line:
+                gibbs_free = float(line.split()[7])
+
+        d = {'SCF': scf,
+             'ZPE': zpe,
+             'Interal': internal,
+             'Enthalpy': enthalpy,
+             'Gibbs': gibbs_free}
+
+        return d
+
+    def _parse_shielding(self):
+        return
+
+    def _parse_spin(self):
+        return
+
+    def _parse_charge(self):
+
+        mull_str = 'Mulliken charges:'
+        charges = []
+
+        for idx, line in enumerate(self.contents):
+
+            if mull_str in line:
+                start_idx = idx + 2
+                for id, chrge in enumerate(self.contents[start_idx:]):
+                    charge = chrge.split()
+                    if len(charge) > 3:
+                        break
+                    else:
+                        charges.append(charge[-1])
+        return charges
+
+    def _parse_polarity(self):
+        # Dipole
+        dipole_str = 'Electric dipole moment'
+        for idx,line in enumerate(self.contents):
+            if dipole_str in line:
+                total_dipole = float(self.contents[idx+3].split()[2].replace("D", "E"))
+                x_dipole = self.contents[idx+4].split()[2]
+                y_dipole = self.contents[idx+5].split()[2]
+                z_dipole = self.contents[idx+6].split()[2]
+
+                isotropic_polar = float(self.contents[idx+12].split()[2].replace("D", "E"))
+                anisotropic_polar = float(self.contents[idx+13].split()[2].replace("D", "E"))
+                break
+        
+        d = {'Dipole (Debye)': total_dipole,
+             'Isotropic Polarizability (A^3)': isotropic_polar,
+             'Anisotropic Polarizability (A^3)': anisotropic_polar}
+        
+        return d
+
+    def _parse_timing(self):
+        timing = []
+        for idx, line in enumerate(self.contents):
+            if 'Job cpu time' in line:
+                t = line.split()
+                time = ':'.join([t[3], t[5], t[7], t[9]])
+                timing.append(time)
+            if 'Elapsed time' in line:
+                t = line.split()
+                time = ':'.join([t[3], t[5], t[7], t[9]])
+                timing.append(time)
+        if len(timing) == 4:
+            d = {'geometry optimization time': {'Job cpu time': timing[0],
+                                           'Elapsed time': timing[1]},
+                 'frequency time': {'Job cpu time': timing[2],
+                               'Elapsed time': timing[3]}}
+        else:
+            d = {'geometry optimization time': {'Job cpu time': timing[0],
+                                           'Elapsed time': timing[1]}}
+        return d
+
+    def parse(self):
+        '''
+        Extract relevant information from Gaussian output
+
+        Parameters
+        ----------
+        to_parse : list of str
+            geometry, energy, shielding, spin, frequency, charge, timing 
+        '''
+
+        # Check that the file is valid first
+        if len(self.contents) == 0:
+            raise RuntimeError('No contents to parse: {}'.format(self.path))
+        if 'Normal termination' not in self.contents[-1]:
+            raise RuntimeError('Incomplete Gaussian run: {}'.format(self.path))
+
+        # Initialize result object to store info
+        result = {}
+
+        try:
+            result['protocol'] = self._parse_protocol()
+        except:
+            pass
+        
+        try:
+            result['geom'] = self._parse_geometry()
+        except:
+            pass
+        
+        try:
+            result['rms'] = self._parse_rms()
+        except:
+            pass    
+
+        try:
+            result['forces'] = self._parse_forces()
+        except:
+            pass
+        try:
+            result['energy'] = self._parse_energy()
+        except:
+            pass
+
+        try:
+            result['shielding'] = self._parse_shielding()
+        except:  
+            pass
+
+        try:
+            result['spin'] = self._parse_spin()
+        except:
+            pass
+
+        try:
+            result['frequency'] = self._parse_frequency()
+        except:
+            pass
+
+        try:
+            result['charge'] = self._parse_charge()
+        except:
+            pass
+
+        try:
+            result['polarity'] = self._parse_polarity()
+        except:
+            pass
+
+        try:
+            result['timing'] = self._parse_timing()
+        except:
+            pass
+        
+        return result
+
+    def save(self):
+        pass
 
 class NWChemParser(FileParserInterface):
     """
@@ -348,32 +641,114 @@ class NWChemParser(FileParserInterface):
 
     def _parse_geometry(self):
         """
-        Add docstring
+        Parse geometry either from XYZ files generated by geometry optimization or 
+        from within the NWChem output file.
         """
         search = os.path.dirname(self.path)
         geoms = sorted(glob.glob(os.path.join(search, "*.xyz")))
 
-        if len(geoms) > 0:
+        if len(geoms) > 1:
+
+            def to_xyz_list(fname):
+                geom = isicle.io.load(fname)
+                xyz = geom.to_xyzblock().split('\n')
+                xyz = [x.split() for x in xyz]
+                xyz = [[x[0], float(x[1]), float(x[2]), float(x[3])] for x in xyz]
+                return xyz
+                
+            self.first = to_xyz_list(geoms[0])
+            self.last = to_xyz_list(geoms[-1])
             return isicle.io.load(geoms[-1])
 
-        raise Exception
+        else:
+            line_list = [idx for idx, line in enumerate(self.contents) if "Geometry \"geometry\" -> " in line]
+            first_geom = line_list[0] + 7
+            last_geom = line_list[-1] + 7
+
+            def get_geom(idx):
+                geom = []
+                for line in self.contents[idx:]:
+                    if line == '\n':
+                        break
+                    else:
+                        geom.append(line)
+
+                #text editing to make readable
+                for idx, line in enumerate(geom):
+                    split_line = line.split()
+                    geom[idx]=[split_line[1], float(split_line[3]), float(split_line[4]), float(split_line[5])]
+
+                return geom
+
+            self.first = get_geom(first_geom)
+            self.last = get_geom(last_geom)
+
+            xyz = [[x[0],str(x[1]), str(x[2]), str(x[3])] for x in self.last]
+            xyz = ['\t'.join(x) for x in xyz]
+
+            xyz_block = str(len(xyz))+'\n\n'
+            xyz = '\n'.join(xyz)
+            xyz_block = xyz_block + xyz
+
+            xyz_path = self.path.split('.')[0] + '.xyz'
+            with open(xyz_path, 'w+') as f:
+                f.write(xyz_block)
+            f.close()
+
+            geom = isicle.load(xyz_path)
+            os.remove(xyz_path)
+
+    def _parse_rms(self):
+        xyz1 = [x[1:] for x in self.first]
+        xyz2 = [y[1:] for y in self.last]
+
+        rms = np.sqrt(np.mean((np.array(xyz1) - np.array(xyz2)) ** 2))
+
+        return rms
 
     def _parse_energy(self):
         """
-        Add docstring
+        Parse DFT energies from each step in the geometry optimization.
         """
-        # TO DO: Add Initial energy and final energy if different
 
         # Init
-        energy = None
+        energy = []
 
         # Cycle through file
         for line in self.contents:
             if "Total DFT energy" in line:
                 # Overwrite last saved energy
-                energy = float(line.split()[-1])
+                energy.append(float(line.split()[-1]))
 
         return energy
+
+
+    def _parse_forces(self):
+        line_list = [idx for idx, line in enumerate(self.contents) if 'GRADIENTS' in line]
+        line_list = [idx+4 for idx in line_list]
+        atomic_masses = isicle.utils.atomic_masses()
+   
+        def get_forces(idx):
+            forces = []
+            for line in self.contents[idx:]:
+                if line == '\n':
+                    break
+                else:
+                    forces.append(line)
+
+            #text editing to make readable
+            for idx, line in enumerate(forces):
+                split_line = line.split()
+                forces[idx]=[split_line[1], float(split_line[5]), float(split_line[6]), float(split_line[7])]
+
+            return forces
+
+        forces = []
+        for idx in line_list:
+            forces.append(get_forces(idx))
+
+        return forces
+
 
     def _parse_shielding(self):
         """
@@ -739,7 +1114,17 @@ class NWChemParser(FileParserInterface):
 
         except:
             pass
+        try:
+            result["rms"] = self._parse_rms()
 
+        except:
+            pass
+
+        try:
+            result["forces"] = self._parse_forces()
+
+        except:
+            pass
         try:
             result["energy"] = self._parse_energy()
         except:
@@ -1078,11 +1463,12 @@ class XTBParser(FileParserInterface):
         """
         Add docstring
         """
+        energies = []
         for line in self.contents:
-            if "TOTAL ENERGY" in line:
-                energy = line.split()[3] + " Hartrees"
+            if "* total energy" in line:
+                energies.append(float(line.split()[4]))
 
-        return {"Total energy": energy}
+        return energies
 
     def _opt_timing(self):
         """
@@ -1153,7 +1539,7 @@ class XTBParser(FileParserInterface):
                 protocol = (line.split(":")[1]).strip("\n")
         return protocol
 
-    def _parse_xyz(self):
+    def _parse_geometry(self):
         """
         Split .xyz into separate XYZGeometry instances
         """
@@ -1163,17 +1549,55 @@ class XTBParser(FileParserInterface):
             geom_list = []
             count = 1
             XYZ = FILE.split(".")[0]
+
+            x = []
             for geom in pybel.readfile("xyz", FILE):
                 geom.write("xyz", "%s_%d.xyz" % (XYZ, count))
-                geom_list.append("%s_%d.xyz" % (XYZ, count))
+                x.append(isicle.io.load("%s_%d.xyz" % (XYZ, count)))
+                os.remove("%s_%d.xyz" % (XYZ, count))
                 count += 1
-
-            x = [isicle.io.load(i) for i in geom_list]
 
         else:
             x = [isicle.io.load(self.xyz_path)]
 
+
+        # Establishing first and last geometries for RMS
+        def xyz_block_to_list(geom):
+            xyz = geom.to_xyzblock().split('\n')[2:]
+            xyz = [x.split() for x in xyz]
+            xyz = [[x[0], float(x[1]), float(x[2]), float(x[3])] for x in xyz]
+            return xyz
+
+        self.first = xyz_block_to_list(x[0])
+        self.last = xyz_block_to_list(x[-1])
+ 
         return isicle.conformers.ConformationalEnsemble(x)
+
+    def _parse_rms(self):
+        xyz1 = [x[1:] for x in self.first]
+        xyz2 = [y[1:] for y in self.last]
+
+        rms = np.sqrt(np.mean((np.array(xyz1) - np.array(xyz2)) ** 2))
+
+        return rms
+
+    def _parse_forces(self):
+
+        with open('gradients', 'r') as f:
+            contents = f.readlines()
+
+        atoms = []
+        forces = []
+        for line in contents:
+            if line.split() == 4:
+                atoms.append(line.split()[-1])
+            if line.split() == 3:
+                f = line.split()
+                forces.append([float(x) for x in f])
+
+        forces = [[atoms[idx], forces[idx][:]] for idx, line in enumerate(forces)]
+
+        return forces
 
     def parse(self):
         """
@@ -1193,29 +1617,19 @@ class XTBParser(FileParserInterface):
             raise RuntimeError("XTB job failed: {}".format(self.path))
 
         self.parse_crest = False
-        self.parse_opt = False
+        self.parse_opt = False 
         self.parse_isomer = False
 
         # Initialize result object to store info
         result = {}
         result["protocol"] = self._parse_protocol()
 
-        try:
-            result["timing"] = self._parse_timing()
-        except:
-            pass
-
-        try:
-            result["energy"] = self._parse_energy()
-        except:
-            pass
-
         # Parse geometry from assoc. XYZ file
         try:
             if self.path.endswith("xyz"):
                 try:
                     self.xyz_path = self.path
-                    result["geom"] = self._parse_xyz()
+                    result["geom"] = self._parse_geometry()
 
                 except:
                     pass
@@ -1226,7 +1640,7 @@ class XTBParser(FileParserInterface):
                     XYZ = None
                     if result["protocol"].split()[0] == "xtb":
                         self.parse_opt = True
-                        XYZ = "xtbopt.xyz"
+                        XYZ = "xtbopt.log"
                     if result["protocol"].split()[1] == "crest":
                         if "-deprotonate" in result["protocol"]:
                             self.parse_isomer = True
@@ -1251,11 +1665,32 @@ class XTBParser(FileParserInterface):
                         temp_dir = os.path.dirname(self.path)
                         self.xyz_path = os.path.join(temp_dir, XYZ)
 
-                        result["geom"] = self._parse_xyz()
+                        result["geom"] = self._parse_geometry()
                 except:
                     pass
         except:
             pass
+
+        try:
+            result["timing"] = self._parse_timing()
+        except:
+            pass
+
+        try:
+            result["energy"] = self._parse_energy()
+        except:
+            pass
+
+        try:
+            result['rms'] = self._parse_rms()
+        except:
+            pass
+
+        try:
+            result['forces'] = self._parse_forces()
+        except:
+            pass
+
         return result
 
     def save(self, path):
