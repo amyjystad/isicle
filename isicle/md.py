@@ -136,7 +136,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         self.geom.path = geomfile
 
     def _configure_xtb(
-        self, forcefield="gfn2", optlevel="normal", charge=None, solvation=None
+        self, forcefield="gfn2", optlevel="normal", charge=None, solvation=None, parameter_file=None
     ):
         """
         Set command line for xtb simulations.
@@ -176,6 +176,9 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         # Add optional implicit solvation
         if solvation is not None:
             s += "--alpb " + solvation + " "
+
+        if parameter_file is not None:
+            s += "--vparam "+ parameter_file + " "
 
         # Add output
         s += "&>" + " "
@@ -296,6 +299,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         processes=1,
         solvation=None,
         ignore_topology=False,
+        parameter_file=None,
     ):
         """
         Generate command line
@@ -361,6 +365,7 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
                     processes=processes,
                     solvation=solvation,
                     ignore_topology=ignore_topology,
+                    parameter_file=parameter_file,
                 )
             else:
                 raise Error(
