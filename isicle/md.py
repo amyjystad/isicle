@@ -166,15 +166,15 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         if gradient is True:
             s += " --grad "
 
-        # Add optimize tag
-        s += " --opt " + optlevel + " "
+        if gradient is False:# Add optimize tag
+            s += " --opt " + optlevel + " "
 
         # Add forcefield
         s += "--" + forcefield + " "
 
         # Add optional charge
         if charge is not None:
-            s += "--chrg " + charge + " "
+            s += "--chrg " + str(charge) + " "
 
         # Add optional implicit solvation
         if solvation is not None:
@@ -183,13 +183,12 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         if parameter_file is not None:
             s += "--vparam "+ parameter_file + " "
         
-        s += "--P {} ".format(processes)
+        s += "-P {} ".format(processes)
 
         # Add output
         s += "&>" + " "
 
         s += "{}.{}".format(self.basename, "out")
-        print(s)
         return s
 
     def _configure_crest(
@@ -412,13 +411,12 @@ class XTBWrapper(XYZGeometry, WrapperInterface):
         parser.load(os.path.join(self.temp_dir, self.basename + ".out"))
         self.output = parser.load(os.path.join(self.temp_dir, self.basename + ".out"))
 
+        owd = os.getcwd()
+        os.chdir(self.temp_dir)
         result = parser.parse()
+        os.chdir(owd)
 
         self.__dict__.update(result)
-
-        for i in self.geom:
-            i.add___dict__({k: v for k, v in result.items() if k != "geom"})
-            i.__dict__.update(basename=self.basename)
 
         if self.task != "optimize":
             conformerID = 1
