@@ -400,22 +400,27 @@ class GaussianParser(FileParserInterface):
         self.first = get_geom(first_geom)
         self.last = get_geom(last_geom)
 
-        xyz = [[x[0],str(x[1]), str(x[2]), str(x[3])] for x in self.last]
-        xyz = ['\t'.join(x) for x in xyz]
+        def convert_list_to_geom(lst):
+            xyz = [[x[0],str(x[1]), str(x[2]), str(x[3])] for x in lst]
+            xyz = ['\t'.join(x) for x in xyz]
 
-        xyz_block = str(len(xyz))+'\n\n'
-        xyz = '\n'.join(xyz)
-        xyz_block = xyz_block + xyz
+            xyz_block = str(len(xyz))+'\n\n'
+            xyz = '\n'.join(xyz)
+            xyz_block = xyz_block + xyz
 
-        xyz_path = self.path.split('.')[0] + '.xyz'
-        with open(xyz_path, 'w+') as f:
-            f.write(xyz_block)
-        f.close()
+            xyz_path = 'temp.xyz'
+            with open(xyz_path, 'w+') as f:
+                f.write(xyz_block)
+            f.close()
+            geom = isicle.load(xyz_path)
 
-        geom = isicle.load(xyz_path)
-        os.remove(xyz_path)
+            os.remove(xyz_path)
+            return geom
 
-        return geom
+        initial_geom = convert_list_to_geom(self.first)
+        final_geom = convert_list_to_geom(self.last)
+ 
+        return initial_geom, final_geom
 
     def _parse_rms(self):
         xyz1 = [x[1:] for x in self.first]
@@ -454,28 +459,20 @@ class GaussianParser(FileParserInterface):
     def _parse_frequency(self):
         
         frequency_list = []
+        intensity_list = []
 
         for line in self.contents:
             if 'Frequencies' in line:
                 freq = line.split()[2:]
                 for i in freq:
-                    frequency_list.append(i)        
+                    frequency_list.append(float(i))
 
-        return frequency_list
+            if 'IR Inten' in line:
+                ir_intensity = line.split()[2:]
+                for i in ir_intensity:
+                    intensity_list.append(float(i))
 
-    def _parse_energy(self):
-
-        scf = None
-        zpe = None
-        internal = None
-        enthalpy = None
-        gibbs_free = None
-
-        for line in self.contents:
-
-            if ' SCF Done: ' in line:
-                scf = float(line.split()[4])
-
+    
             if 'Sum of electronic and zero-point' in line:
                 zpe = float(line.split()[6])
 
@@ -488,13 +485,32 @@ class GaussianParser(FileParserInterface):
             if "Sum of electronic and thermal Free Energies" in line:
                 gibbs_free = float(line.split()[7])
 
-        d = {'SCF': scf,
-             'ZPE': zpe,
-             'Interal': internal,
-             'Enthalpy': enthalpy,
-             'Gibbs': gibbs_free}
+            if "Temperature" in line:
+                temp = float(line.split()[1])
 
-        return d
+            return {
+                "frequencies": freq,
+                "intensity ": intensity_list,
+                "temperature": temp,
+                "internal energy": internal,
+                "enthalpy": enthalpy,
+                "gibbs free energy": gibbs_free,
+                "zero-point correction": zpe,
+            }
+
+
+        return frequency_list
+
+    def _parse_energy(self):
+
+        scf = []
+
+        for line in self.contents:
+
+            if ' SCF Done: ' in line:
+                scf.append(float(line.split()[4]))
+
+        return scf
 
     def _parse_shielding(self):
         return
@@ -585,7 +601,7 @@ class GaussianParser(FileParserInterface):
             pass
         
         try:
-            result['geom'] = self._parse_geometry()
+            result["initial geom"], result["final geom"] = self._parse_geometry()
         except:
             pass
         
@@ -676,7 +692,7 @@ class NWChemParser(FileParserInterface):
                 
             self.first = to_xyz_list(geoms[0])
             self.last = to_xyz_list(geoms[-1])
-            return isicle.io.load(geoms[-1])
+            return isicle.io.load(geoms[0]), isicle.io.load(geoms[-1])
 
         else:
             line_list = [idx for idx, line in enumerate(self.contents) if "Geometry \"geometry\" -> " in line]
@@ -701,22 +717,26 @@ class NWChemParser(FileParserInterface):
             self.first = get_geom(first_geom)
             self.last = get_geom(last_geom)
 
-            xyz = [[x[0],str(x[1]), str(x[2]), str(x[3])] for x in self.last]
-            xyz = ['\t'.join(x) for x in xyz]
+            def convert_list_to_geom(lst):
+                xyz = [[x[0],str(x[1]), str(x[2]), str(x[3])] for x in lst]
+                xyz = ['\t'.join(x) for x in xyz]
 
-            xyz_block = str(len(xyz))+'\n\n'
-            xyz = '\n'.join(xyz)
-            xyz_block = xyz_block + xyz
+                xyz_block = str(len(xyz))+'\n\n'
+                xyz = '\n'.join(xyz)
+                xyz_block = xyz_block + xyz
 
-            xyz_path = self.path.split('.')[0] + '.xyz'
-            with open(xyz_path, 'w+') as f:
-                f.write(xyz_block)
-            f.close()
+                xyz_path = self.path.split('.')[0] + '.xyz'
+                with open(xyz_path, 'w+') as f:
+                    f.write(xyz_block)
+                f.close()
+                geom = isicle.load(xyz_path)
 
-            geom = isicle.load(xyz_path)
-            os.remove(xyz_path)
-            
-            return geom
+                os.remove(xyz_path)
+                return geom
+
+            initial_geom = convert_list_to_geom(self.first)
+            final_geom = convert_list_to_geom(self.last)
+            return initial_geom, final_geom
 
     def _parse_rms(self):
         xyz1 = [x[1:] for x in self.first]
@@ -845,19 +865,35 @@ class NWChemParser(FileParserInterface):
 
     def _parse_frequency(self):
         """
-        Add docstring
+        Parse frequencies, respective intensities, and thermodynamic energies
+
+        Parameters
+        ----------
+        self
+
+        Returns
+        -------
+        r['frequencies'] in cm^-1
+        r['intensities']: intensities in km/mol units
+        r['temperature']: temperature in kelvin
+        r['internal energy']: internal energy in Hartrees
+        r['enthalpy']: enthalpy in Hartrees
+        r['gibbs free energy']: gibbs free energy in Hartrees
+        r['zero point energy']: zero point energy in Hartrees
         """
         # TO DO: Add freq intensities
         # TO DO: Add rotational/translational/vibrational Cv and entropy
         freq = None
-        zpe = None
-        enthalpies = None
-        entropies = None
-        capacities = None
-        temp = None
         scaling = None
         natoms = None
         has_frequency = None
+
+        scf = None
+        temp = []
+        zero_point_energy = []
+        internal_energy = []
+        enthalpy = []
+        entropy = []
 
         for i, line in enumerate(self.contents):
             if ("geometry" in line) and (natoms is None):
@@ -870,46 +906,53 @@ class NWChemParser(FileParserInterface):
                 freq_start = i + 3
                 freq_stop = i + 2 + 3 * natoms
 
-            # Get values
+            if "Temperature" in line:
+                temp.append(float(line.split()[-1].split('K')[0]))
             if "Zero-Point correction to Energy" in line:
-                zpe = line.rstrip().split("=")[-1]
-
+                zero_point_energy.append(float(line.split()[-2]))
+            if "Thermal correction to Energy" in line:
+                internal_energy.append(float(line.split()[-2]))
             if "Thermal correction to Enthalpy" in line:
-                enthalpies = line.rstrip().split("=")[-1]
-
+                enthalpy.append(float(line.split()[-2]))
             if "Total Entropy" in line:
-                entropies = line.rstrip().split("=")[-1]
+                entropy.append(float(line.split()[-2]))
 
-            if "constant volume heat capacity" in line:
-                capacities = line.rstrip().split("=    ")[-1]
+        if len(zero_point_energy)>0:
+            sum_zero_point_energy = []
+            for idx, val in enumerate(z):
+                zsum = val + scf
+                fsumz = '{:{width}.{prec}f}'.format(zsum, width=12, prec=5)
+                sum_zero_point_energy.append(fsumz)
+        if len(i)>0:
+            sum_internal_energy = []
+            for idx, val in enumerate(i):
+                sum_internal_energy.append('{:{width}.{prec}f}'.format(val + scf, width=12, prec=5))
+        if len(h)>0:
+            sum_enthalpy = []
+            for idx, val in enumerate(h):
+                sum_enthalpy.append('{:{width}.{prec}f}'.format(val+scf, width=12, prec=5))
+        if len(h)>0 and len(s)>0:
+            sum_gibbs_free_energy = []
+            for idx, val in enumerate(h):
+                gibbs = scf + enthalpy[idx] - temp[idx]*(entropy[idx]/(1000*627.509))
+                sum_gibbs_free_energy.append('{:{width}.{prec}f}'.format(g, width=12, prec=5))
 
         if has_frequency is True:
             freq = np.array(
                 [float(x.split()[1]) for x in self.contents[freq_start : freq_stop + 1]]
             )
-            intensity_au = np.array(
-                [float(x.split()[3]) for x in self.contents[freq_start : freq_stop + 1]]
-            )
-            intensity_debyeangs = np.array(
-                [float(x.split()[4]) for x in self.contents[freq_start : freq_stop + 1]]
-            )
-            intensity_KMmol = np.array(
+            intensity_kmmol = np.array(
                 [float(x.split()[5]) for x in self.contents[freq_start : freq_stop + 1]]
-            )
-            intensity_arbitrary = np.array(
-                [float(x.split()[6]) for x in self.contents[freq_start : freq_stop + 1]]
             )
 
             return {
                 "frequencies": freq,
-                "intensity atomic units": intensity_au,
-                "intensity (debye/angs)**2": intensity_debyeangs,
-                "intensity (KM/mol)": intensity_KMmol,
-                "intensity arbitrary": intensity_arbitrary,
-                "correction to enthalpy": enthalpies,
-                "total entropy": entropies,
-                "constant volume heat capacity": capacities,
-                "zero-point correction": zpe,
+                "intensity": intensity_kmmol,
+                "temperature": temp,
+                "internal energy": sum_internal_energy,
+                "enthalpy": sum_enthalpy,
+                "gibbs free energy": sum_gibbs_free_energy,
+                "zero-point correction": zero_point_energy,
             }
 
         raise Exception
@@ -1157,7 +1200,7 @@ class NWChemParser(FileParserInterface):
             pass
 
         try:
-            result["geom"] = self._parse_geometry()
+            result["initial geom"], result["final geom"] = self._parse_geometry()
 
         except:
             pass
@@ -1604,21 +1647,25 @@ class XTBParser(FileParserInterface):
         Split .xyz into separate XYZGeometry instances
         """
 
-        FILE = self.xyz_path
-        if len(list(pybel.readfile("xyz", FILE))) > 1:
-            geom_list = []
-            count = 1
-            XYZ = FILE.split(".")[0]
+        try:
+            FILE = self.xyz_path
+            if len(list(pybel.readfile("xyz", FILE))) > 1:
+                geom_list = []
+                count = 1
+                XYZ = FILE.split(".")[0]
 
-            x = []
-            for geom in pybel.readfile("xyz", FILE):
-                geom.write("xyz", "%s_%d.xyz" % (XYZ, count))
-                x.append(isicle.io.load("%s_%d.xyz" % (XYZ, count)))
-                os.remove("%s_%d.xyz" % (XYZ, count))
-                count += 1
+                x = []
+                for geom in pybel.readfile("xyz", FILE):
+                    geom.write("xyz", "%s_%d.xyz" % (XYZ, count))
+                    x.append(isicle.io.load("%s_%d.xyz" % (XYZ, count)))
+                    os.remove("%s_%d.xyz" % (XYZ, count))
+                    count += 1
 
-        else:
-            x = [isicle.io.load(self.xyz_path)]
+            else:
+                x = [isicle.io.load(self.xyz_path)]
+        except:
+            xyzs = glob.glob('*xyz')
+            x = [isicle.io.load(xyz) for xyz in xyzs]
 
 
         # Establishing first and last geometries for RMS
